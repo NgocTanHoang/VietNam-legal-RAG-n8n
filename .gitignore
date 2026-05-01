@@ -1,0 +1,42 @@
+
+.nx/
+
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+*.pyo
+pip-wheel-metadata/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment files
+.env
+*.env
+
+# Node
+node_modules/
+
+# Local runtime / generated data
+infra/n8n_data/
+postgres_data/
+neo4j_data/
+qdrant_data/
+data/raw/
+data/processed/
+
+# Local workflow / personal files
+n8n_workflows/My workflow.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Other
+.vscode/
+*.log
+*~
+

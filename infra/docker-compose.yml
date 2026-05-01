@@ -1,0 +1,58 @@
+services:
+  # qdrant:
+  #   image: qdrant/qdrant:latest
+  #   container_name: qdrant_legal
+  #   ports:
+  #     - "6333:6333"
+  #   volumes:
+  #     - ./qdrant_data:/qdrant/storage
+
+  neo4j:
+    image: neo4j:latest
+    container_name: neo4j_legal
+    environment:
+      - NEO4J_AUTH=neo4j/12345678
+      - NEO4J_ACCEPT_LICENSE_AGREEMENT=yes
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - ./neo4j_data:/data
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n_legal
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_USER_MANAGEMENT_DISABLED=true # 
+      - WEBHOOK_URL=https://iva-refutative-nonbureaucratically.ngrok-free.dev
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres_legal
+    environment:
+      - POSTGRES_USER=n8n_user
+      - POSTGRES_PASSWORD=n8n_password
+      - POSTGRES_DB=n8n_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: ngrok_legal
+    command:
+      - "http"
+      - "n8n:5678"
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    ports:
+      - "4040:4040"
+    depends_on:
+      - n8n
+
+  

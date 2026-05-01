@@ -1,0 +1,25 @@
+# --- Core Data Processing ---
+pandas==2.2.1
+numpy==1.26.4
+beautifulsoup4==4.12.3
+lxml==5.1.0
+
+# --- RAG & Chunking ---
+langchain-text-splitters==0.0.1
+# Thư viện embedding chạy cực nhanh trên CPU i7
+fastembed==0.2.6 
+
+# --- Vector Database (Qdrant) ---
+qdrant-client==1.8.0
+
+# --- Graph Database (Neo4j) ---
+neo4j==5.18.0
+
+# --- Utils & Environments ---
+python-dotenv==1.0.1
+tqdm==4.66.2
+uuid==1.30
+
+# --- Optional: For collecting data from HF ---
+datasets==2.18.0
+neo4j
