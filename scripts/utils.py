@@ -7,6 +7,13 @@ from qdrant_client.http.models import VectorParams
 from fastembed.text.text_embedding import TextEmbedding
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+import logging
+from datetime import datetime
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import VectorParams
+from fastembed.text.text_embedding import TextEmbedding
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 
 def clean_text(text):
     """Làm sạch văn bản thô"""
@@ -34,119 +41,94 @@ def check_port_open(host="127.0.0.1", port=6333, timeout=5):
 from qdrant_client import QdrantClient
 
 def get_qdrant_client(url=None, api_key=None, host=None, port=None):
-    if url and api_key:
-        # Kết nối Cloud
+    if url: # Ưu tiên URL cho Cloud
         return QdrantClient(url=url, api_key=api_key)
-    # Kết nối Local cũ
-    return QdrantClient(host=host, port=port)
-
+    return QdrantClient(host=host or "127.0.0.1", port=port or 6333)
 
 def ensure_collection(client, collection_name, vector_size, distance="Cosine", shards=1, replication_factor=1):
-    """Tạo collection nếu chưa tồn tại."""
     if client.collection_exists(collection_name):
         return
-
-    vector_params = VectorParams(size=vector_size, distance=distance)
+    
+    # Với MiniLM (384 dims), cấu hình này là tối ưu
     client.create_collection(
         collection_name=collection_name,
-        vectors_config=vector_params,
+        vectors_config=VectorParams(size=vector_size, distance=distance),
         shard_number=shards,
         replication_factor=replication_factor,
     )
+    logging.info(f"Đã tạo collection mới: {collection_name} với size {vector_size}")
 
-
-def load_embedding_model(model_name='intfloat/multilingual-e5-large', cache_dir=None, threads=None):
-    """Tải model embedding từ fastembed."""
-    if cache_dir is None:
-        cache_dir = os.getenv('FASTEMBED_CACHE_DIR')
-
+def load_embedding_model(model_name='sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2', cache_dir=None, threads=None):
+    """Tải model MiniLM."""
     return TextEmbedding(
         model_name=model_name,
-        cache_dir=cache_dir,
+        cache_dir=cache_dir or os.getenv('FASTEMBED_CACHE_DIR'),
         threads=threads,
     )
 
-
 def embed_texts(model, texts, batch_size=64, parallel=1):
-    """Lấy embedding cho một danh sách văn bản."""
     if isinstance(texts, str):
         texts = [texts]
-
+    # Fastembed trả về generator, chuyển thành list list float
     embeddings = list(model.embed(texts, batch_size=batch_size, parallel=parallel))
     return [embedding.tolist() for embedding in embeddings]
 
-
 def finalize_embedding_text(row):
-    """Chuẩn hóa văn bản trước khi đưa vào model Embedding"""
-    title = row.get('title', "Không có tiêu đề")
-    so_hieu = row.get('so_ky_hieu', "Không số hiệu")
+    """Chuẩn hóa văn bản. Bỏ prefix 'passage:' cho MiniLM"""
+    title = row.get('title', "")
+    so_hieu = row.get('so_ky_hieu', "")
     loai = row.get('loai_van_ban', "")
     content = row.get('content_clean', "")
 
-    if not content or len(content.split()) < 20:
-        return (
-            f"Văn bản pháp luật: {title}. Số hiệu: {so_hieu}. "
-            f"Loại: {loai}. Nội dung trích yếu đang cập nhật."
-        )
-
-    return f"Tiêu đề: {title}. Loại: {loai}. Số hiệu: {so_hieu}. Nội dung: {content}"
-
+    # Tạo chuỗi thông tin cô đọng
+    return f"Văn bản: {title}. Số hiệu: {so_hieu}. Loại: {loai}. Nội dung: {content}"
 
 def build_clean_payload(row, rela_dict):
-    """Tạo dict payload sạch để lưu vào Qdrant"""
-    preview = row.get('content_clean', '')[:1000] if row.get('content_clean') else row.get('title', '')
+    """Tạo payload và bóc tách thêm năm ban hành để hỗ trợ Agent thống kê"""
+    raw_date = row.get('ngay_ban_hanh', '')
+    year = None
+    
+    # Trích xuất năm để hỗ trợ lọc (filtering)
+    if raw_date and isinstance(raw_date, str):
+        match = re.search(r'\d{4}', raw_date)
+        if match:
+            year = int(match.group())
 
     return {
         "id": str(row.get('id', '')),
         "title": row.get('title'),
         "so_ky_hieu": row.get('so_ky_hieu'),
-        "ngay_ban_hanh": row.get('ngay_ban_hanh'),
+        "ngay_ban_hanh": raw_date,
+        "nam_ban_hanh": year, # Thêm trường này để Agent dễ đếm/lọc
         "tinh_trang_hieu_luc": row.get('tinh_trang_hieu_luc'),
         "loai_van_ban": row.get('loai_van_ban'),
         "relationships": rela_dict.get(str(row.get('id', '')), []),
-        "content_preview": preview,
+        "content_preview": row.get('content_clean', '')[:1000],
     }
 
-
-def get_default_splitter(chunk_size=1000, chunk_overlap=100):
-    """Khởi tạo splitter nếu không được truyền vào"""
-    return RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", ". ", " ", ""]
-    )
-
-
 def chunk_text_optimized(row, splitter=None):
-    """
-    Tối ưu việc chia nhỏ văn bản và chuẩn hóa dữ liệu cho Vector Store.
-    """
     full_text = row.get('text_for_embedding', "")
     base_payload = row.get('payload', {})
     doc_id = base_payload.get('id', 'unknown')
 
     if splitter is None:
-        splitter = get_default_splitter()
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000, 
+            chunk_overlap=150, # Tăng overlap một chút để không mất ngữ cảnh giữa các chunk
+            separators=["\n\n", "\n", ". ", " ", ""]
+        )
 
     texts = splitter.split_text(full_text)
     chunks = []
-
-    if len(texts) <= 1:
-        final_payload = base_payload.copy()
-        final_payload.update({
-            "chunk_id": f"{doc_id}_full",
-            "is_chunked": False,
-            "content_preview": full_text[:1000],
-        })
-        return [("passage: " + full_text, final_payload)]
 
     for i, t in enumerate(texts):
         chunk_payload = base_payload.copy()
         chunk_payload.update({
             "content_preview": t,
             "chunk_id": f"{doc_id}_chunk_{i}",
-            "is_chunked": True,
+            "is_chunked": len(texts) > 1,
         })
-        chunks.append(("passage: " + t, chunk_payload))
+        # KHÔNG thêm "passage: " ở đây cho model MiniLM
+        chunks.append((t, chunk_payload))
 
     return chunks
